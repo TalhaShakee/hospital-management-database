@@ -1,6 +1,7 @@
 import subprocess
 import sys
 
+# auto-install faker if not present
 try:
     from faker import Faker
 except ImportError:
@@ -12,7 +13,10 @@ except ImportError:
 import sqlite3
 import random
 
+# using british locale since this is a UK hospital
 fake = Faker("en_GB")
+
+# fixed seeds so the data is the same every time we run it
 Faker.seed(42)
 random.seed(42)
 
@@ -22,14 +26,17 @@ SCHEMA_FILE = "schema.sql"
 conn = sqlite3.connect(DB_NAME)
 cursor = conn.cursor()
 
+# read the sql schema file and create all tables
 with open(SCHEMA_FILE, "r") as f:
     schema_sql = f.read()
 
 conn.executescript(schema_sql)
 print(f"Schema loaded from '{SCHEMA_FILE}'")
 
+# executescript resets pragma settings so we turn fk back on
 conn.execute("PRAGMA foreign_keys = ON")
 
+# 10 real nhs-style departments with realistic floor and bed numbers
 departments_data = [
     ("Emergency Medicine",       0, 50, fake.name()),
     ("Cardiology",               2, 35, fake.name()),
@@ -49,6 +56,8 @@ cursor.executemany(
 )
 print(f"Inserted {len(departments_data)} departments.")
 
+# map specialisations to departments so doctors make sense
+# e.g. cardiology doctors get cardiology-related specs
 specialisations = {
     1:  ["Emergency Medicine", "Trauma Surgery", "Critical Care"],
     2:  ["Interventional Cardiology", "Electrophysiology", "Heart Failure"],
@@ -62,6 +71,7 @@ specialisations = {
     10: ["Obstetrics", "Gynaecological Surgery", "Reproductive Medicine"],
 }
 
+# 50 doctors, 5 per department
 doctors_data = []
 for i in range(50):
     dept_id = (i % 10) + 1
@@ -80,14 +90,19 @@ cursor.executemany(
 )
 print(f"Inserted {len(doctors_data)} doctors.")
 
+# blood type weights based on uk population stats
 blood_types = ["O+", "O-", "A+", "A-", "B+", "B-", "AB+", "AB-"]
 blood_weights = [35, 13, 30, 8, 8, 2, 2, 2]
+
 genders = ["Male", "Female", "Non-Binary", "Prefer Not to Say"]
 gender_weights = [48, 48, 2, 2]
 
+# 1500 patients - well above the 1000 minimum
 patients_data = []
 for _ in range(1500):
     gender = random.choices(genders, weights=gender_weights, k=1)[0]
+
+    # pick a name that matches the gender
     if gender == "Male":
         first = fake.first_name_male()
     elif gender == "Female":
@@ -95,16 +110,21 @@ for _ in range(1500):
     else:
         first = fake.first_name()
     last = fake.last_name()
+
     dob = fake.date_of_birth(minimum_age=0, maximum_age=100).strftime("%Y-%m-%d")
     blood = random.choices(blood_types, weights=blood_weights, k=1)[0]
+
+    # gaussian distribution for realistic spread around uk averages
     weight = round(random.gauss(75, 15), 1)
-    weight = max(2.5, weight)
+    weight = max(2.5, weight)  # minimum for newborns
     height = round(random.gauss(170, 12), 1)
     height = max(45, height)
+
     phone = fake.phone_number()
     address = fake.street_address()
     postcode = fake.postcode()
     reg_date = fake.date_between(start_date="-5y", end_date="today").strftime("%Y-%m-%d")
+
     patients_data.append((first, last, dob, gender, blood, weight, height,
                           phone, address, postcode, reg_date))
 
@@ -116,18 +136,22 @@ cursor.executemany(
 )
 print(f"Inserted {len(patients_data)} patients.")
 
+# most visits are standard or non-urgent, few are critical
 triage_levels = ["Non-Urgent", "Standard", "Urgent", "Emergency", "Critical"]
 triage_weights = [25, 35, 20, 15, 5]
+
+# most appointments end up completed
 statuses = ["Scheduled", "Checked-In", "In Progress", "Completed", "Cancelled"]
 status_weights = [10, 5, 5, 70, 10]
 
+# templates to generate varied but realistic clinical notes
 notes_templates = [
     "Patient presents with {symptom}. {action} recommended.",
     "Follow-up visit for {condition}. {outcome}.",
     "Routine check-up. All vitals within normal range.",
     "Patient reports {symptom}. Referred to {dept} for further investigation.",
     "Post-operative review. Recovery progressing well.",
-    None,
+    None,  # not all appointments have notes
 ]
 symptoms = ["chest pain", "headaches", "joint pain", "skin rash", "fatigue",
             "shortness of breath", "abdominal pain", "dizziness", "back pain",
@@ -140,17 +164,20 @@ outcomes = ["Condition stable", "Improvement noted", "Medication increased",
             "Discharged from care", "Further monitoring required"]
 
 appointments_data = []
-used_combinations = set()
+used_combinations = set()  # track combos to avoid breaking the unique constraint
 
 for _ in range(2000):
     patient_id = random.randint(1, 1500)
     doctor_id = random.randint(1, 50)
     dept_id = ((doctor_id - 1) % 10) + 1
+
     appt_date = fake.date_between(start_date="-2y", end_date="+1m").strftime("%Y-%m-%d")
+    # 30 min slots between 8am and 5:30pm
     hour = random.randint(8, 17)
     minute = random.choice([0, 30])
     appt_time = f"{hour:02d}:{minute:02d}"
 
+    # skip duplicates
     combo = (patient_id, doctor_id, appt_date, appt_time)
     if combo in used_combinations:
         continue
@@ -159,6 +186,7 @@ for _ in range(2000):
     triage = random.choices(triage_levels, weights=triage_weights, k=1)[0]
     status = random.choices(statuses, weights=status_weights, k=1)[0]
 
+    # higher triage = higher pain, keeps it realistic
     triage_index = triage_levels.index(triage)
     base_pain = triage_index * 2
     pain = min(10, max(0, base_pain + random.randint(-1, 2)))
@@ -186,6 +214,7 @@ cursor.executemany(
 )
 print(f"Inserted {len(appointments_data)} appointments.")
 
+# real nhs medications with actual dosage options
 medications = {
     "Paracetamol":   {"dosages": [250, 500, 1000], "durations": [3, 5, 7, 14]},
     "Ibuprofen":     {"dosages": [200, 400, 600],  "durations": [5, 7, 10, 14]},
@@ -208,11 +237,13 @@ frequencies = ["Once Daily", "Twice Daily", "Three Times Daily",
                "Four Times Daily", "As Needed"]
 freq_weights = [30, 35, 15, 5, 15]
 
+# only completed/in-progress appointments should have prescriptions
 eligible_appointments = [
     (i + 1, a) for i, a in enumerate(appointments_data)
     if a[6] in ("Completed", "In Progress")
 ]
 
+# about 60% of eligible appointments get a prescription
 prescriptions_data = []
 for appt_id, appt in eligible_appointments:
     if random.random() > 0.6:
@@ -234,6 +265,7 @@ cursor.executemany(
 )
 print(f"Inserted {len(prescriptions_data)} prescriptions.")
 
+# nhs funded is most common in the uk (55%)
 payment_methods = ["Cash", "Credit Card", "Debit Card", "Insurance",
                    "NHS Funded", "Bank Transfer"]
 pay_method_weights = [5, 10, 10, 15, 55, 5]
@@ -241,6 +273,7 @@ pay_method_weights = [5, 10, 10, 15, 55, 5]
 payment_statuses = ["Pending", "Partially Paid", "Paid", "Overdue", "Refunded"]
 pay_status_weights = [10, 5, 70, 10, 5]
 
+# more urgent = more expensive
 triage_cost_map = {
     "Non-Urgent": (50, 150),
     "Standard":   (100, 300),
@@ -250,6 +283,7 @@ triage_cost_map = {
 }
 
 billing_data = []
+# only generate bills for attended appointments
 completed_appointments = [
     (i + 1, a) for i, a in enumerate(appointments_data)
     if a[6] in ("Completed", "In Progress", "Checked-In")
@@ -262,6 +296,7 @@ for appt_id, appt in completed_appointments:
     pay_method = random.choices(payment_methods, weights=pay_method_weights, k=1)[0]
     pay_status = random.choices(payment_statuses, weights=pay_status_weights, k=1)[0]
 
+    # nhs usually covers the full cost
     if pay_method == "NHS Funded":
         bill_amount = round(bill_amount * random.choice([0, 0, 0, 0.1, 0.2]), 2)
         if bill_amount == 0:
